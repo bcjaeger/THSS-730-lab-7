@@ -1,0 +1,932 @@
+---
+title: "Lab 7"
+subtitle: "Logistic Regression, Survival Analysis, Power/Sample Size and Review"
+editor: source
+
+execute:
+  warning: false
+  message: false
+  code-fold: true
+
+format: 
+  html: 
+    toc: true
+    df-print: paged
+    embed-resources: true
+---
+
+
+```{r}
+#| code-fold: true
+#| message: false
+
+# Necessary libraries
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(pROC)
+library(survival)
+library(ggsurvfit)
+library(htmltools)
+library(pwrss)
+library(pwr)
+
+```
+
+## Logistic Regression
+
+The population model for logistic regression is:
+
+$$
+\text{logit}(p) = \text{ln} \left( {\frac{p}{1-p}} \right) = \alpha + \beta_1 x_1 + \dots + \beta_k x_k
+$$
+
+or equivalently, if we solve for $p$, then the model can be expressed in the form
+
+$$
+p = \frac{e^{\alpha + \beta_1 x_1 + \dots + \beta_k x_k}}{1 + e^{\alpha + \beta_1 x_1 + \dots + \beta_k x_k}}
+$$
+
+where $Y$ is a **binary outcome** (1 = yes, 0 = no), and $p = \text{P}(Y=1) =$ probability of success.
+
+Assumptions:
+
+-   Observations are independent
+
+-   Linearity on the log odds scale
+
+-   Rule of thumb: need 10 cases with the least frequent outcome per predictor
+
+$\hat{\beta_j} = \text{ln}(\widehat{OR})$ and $\text{exp}(\hat{\beta_j}) = e^{\hat{\beta_j}} = \widehat{OR}$
+
+Where the estimated $\text{ln}(OR)$ and $OR$ are interpreted as the effect after controlling for the other variables in the model.
+
+The estimated $OR$ is for a 1-unit increase in $X$ (this could also be comparing the group coded as 1 to the group coded as 0).
+
+### Example
+
+Going back now to the "lowbwt.xlsx" example. Recall that the data set has the following variables:
+
+-   sbp = systolic blood pressure (mm Hg)
+-   sex = sex (1=male; 0=female)
+-   tox = toxemia diagnosis for mother (1=yes; 0=no)
+-   grmhem = germinal matrix hemorrhage (1=yes; 0=no)
+-   gestage = gestational age (weeks)
+-   apgar5 = apgar score at 5 minutes
+
+```{r}
+#| code-fold: true
+
+# Load data
+
+lowbwt <- read_xlsx("lowbwt.xlsx")
+head(lowbwt)
+
+```
+
+Suppose we want to look at what variables may be associated with the outcome of germinal matrix hemorrhage. The first variable of interest is Apgar score at 5 minutes. This can be accomplished using logistic regression.
+
+We can use the `glm()` (Generalized Linear Model) function to perform logistic regression. We specify the model and data we want to use, like we have previously done with the `lm()` function. The option `family = "binomial"` will fit a logistic regression model.
+
+```{r}
+#| code-fold: true
+
+# Logistic regression model
+log_model_1 <- glm(grmhem ~ apgar5, data = lowbwt, family = "binomial")
+
+# Summary of the model
+summary(log_model_1)
+
+```
+
+To get an ROC curve, we'll need the true 'grmhem' values and predicted probabilities. Then we can input those to the `roc()` function from the package `pROC`. Using that functions output, we can graph the curve and output the area under the curve (AUC) to evaluate our model's performance.
+
+```{r}
+#| code-fold: true
+
+# Get predict probabilities from the model
+pred_prob <- predict(log_model_1, type = "response")
+
+# Use the 'roc()' function from the 'pROC' package
+roc_curve <- roc(lowbwt$grmhem, pred_prob)
+
+# Plot ROC curve with a ggplot2 function
+# 'legacy.axes=TRUE' switches X-axis from Specificity to 1-Specificity
+roc1 <- ggroc(roc_curve, legacy.axes=TRUE) + 
+          labs(x = "1 - Specificity (Level of Significance)",
+               y = "Sensitivity (Power)")
+roc1  
+
+# Display AUC
+auc(roc_curve)
+
+```
+
+Recall that to interpret our parameters, we'll need to input our coefficient estimate into the exponential function. In this case, our estimated odds ratio can be interpreted as when there is a one unit increase in Apgar score, the odds of a gestational matrix hemorrhage decrease by \~22%.
+
+```{r}
+#| code-fold: true
+
+# Grab the coefficient for apgar5
+coef_a5 <- coef(log_model_1)["apgar5"]
+
+# Input to exponential function
+exp(coef_a5)
+
+```
+
+We can go further and compute confidence intervals for the Odds Ratio:
+
+```{r}
+#| code-fold: true
+#| message: false
+
+# First extract the CI for the coefficient from our model results
+confint_a5 <- confint(log_model_1)["apgar5",]
+
+# Now simply input the interval into the exponential function!
+exp(confint_a5)
+
+```
+
+If we want to look at a 2 unit increase, we multiply the estimated coefficient/CI by 2 inside the exponential function. Or in other words, we are squaring the odds ratio:
+
+```{r}
+#| code-fold: true
+
+# Estimate OR for a 2-unit increase
+exp(2 * coef_a5)
+
+# Confidence interval for 2-unit increase
+exp(2 * confint_a5)
+
+
+```
+
+Suppose that in addition to Apgar score at 5 minutes, you want to include the sex of the infant in the model. The `glm()` function can accommodate multiple predictors by including them in the model equation. Notice the AUC improves (slightly) by including the extra variable in our model.
+
+```{r}
+#| code-fold: true
+
+# Logistic regression model with multiple predictors
+log_model_2 <- glm(grmhem ~ apgar5 + sex, data = lowbwt, family = "binomial")
+summary(log_model_2)
+
+# Predict probabilities
+pred_prob_multi <- predict(log_model_2, type = "response")
+
+# Generate ROC curve for the multi-predictor model
+roc_curve_multi <- roc(lowbwt$grmhem, pred_prob_multi)
+
+# Plot ROC curve
+roc2 <- ggroc(roc_curve_multi, legacy.axes=TRUE) + 
+          labs(x = "1 - Specificity (Level of Significance)",
+               y = "Sensitivity (Power)")
+roc2
+
+# Display AUC
+auc(roc_curve_multi)
+
+
+```
+
+## Survival Analysis
+
+Outcome = time to event (where event is binary; 1 = event, 0 = censored)
+
+Sample data:
+
+```{r}
+#| code-fold: true
+
+sample_data <- data.frame(
+  "Subject" = 1:5,
+  "Time" = c(16, 22, 12, 28, 22),
+  "Event" = c(1, 0, 1, 0, 0)
+)
+
+sample_data
+
+```
+
+$S(t)$ is the probability that an individual survives beyond time, i.e., $S(t) = \text{Pr}(T > t)$.
+
+### Kaplan-Meier
+
+-   The Kaplan-Meier estimator is a nonparametric estimator of S(t)
+-   Decreasing step function
+-   Can be used to plot a single survival curve or to plot survival curves for multiple groups
+
+### Log-Rank Test (LRT)
+
+-   Nonparametric test used to compare survival times between groups
+-   $\text{H}_0: S_1(t) = S_2(t)$ vs. $\text{H}_A: S_1(t) \neq S_2(t)$ OR
+-   $\text{H}_0: HR = 1$ vs. $\text{H}_A: HR \neq 1$
+-   Can also be used for more than 2 groups
+
+### Cox Proportional Hazards Model
+
+The hazard function $h(t)$ is the instantaneous probability of having an event at time $t$, given that one has survived (i.e., has not had an event) up to time $t$.
+
+The Cox proportional hazard model can be written as:
+
+$$h(t) = h_0(t)exp(\beta_1 x_1 + \dots + \beta_k x_k)$$ Where $h_0(t)$ is called the baseline hazard and is the hazard when all predictors are equal to 0.
+
+Assumptions:
+
+-   Survival times are independent
+-   Multiplicative relationship between the predictors and the hazard
+-   Constant hazard ratio over time (proportional hazards assumption)
+
+$exp(\hat{\beta}_j) = e^{\hat{\beta}_j} = \widehat{HR}$
+
+Where the estimated HR is interpreted as the effect after controlling for the other variables in the model.
+
+The estimated HR is for a 1-unit increase in X (this could also be comparing the group coded as 1 to the group coded as 0).
+
+### Example
+
+The data set "survival_cancer.xlsx" contains data on 18 cancer patients. The data set has the following variables:
+
+-   id = patient ID number
+-   age = age
+-   gender = gender (1 = female, 0 = male)
+-   trt_date = date treatment started
+-   date_prog = date of progression (or censor date)
+-   date_death = date of death (or censor date)
+-   prog_time = time from start of treatment to progression in days (or last contact if censored)
+-   progress = progression indicator (1 = progression, 0 = censored)
+-   death_time = time from start of treatment to death in days (or last contact if censored)
+-   death = death indicator (1 = death, 0 = censored)
+
+```{r}
+#| code-fold: true
+
+# Load data
+
+surv_cancer <- read_xlsx("survival_cancer.xlsx")
+head(surv_cancer)
+
+```
+
+#### Kaplan-Meier
+
+Suppose the primary outcome in the study is time to progression. A Kaplan-Meier estimate can be obtained using the `survfit2()` function from the `survival` package.
+
+The first argument in this function will be a formula.
+
+-   A `Surv` object is needed as a response to the left of the \~ operator. This takes the form `Surv(<time of event/censor variable>, <event indicator variable>)`
+-   On the right side of the formula, specify the terms to consider for the curve. If you are fitting a single survival curve, the right hand side should be '\~ 1'
+
+The second argument we'll need just specifies the data.
+
+```{r}
+#| code-fold: true
+
+km_table_cancer <- survfit2(Surv(prog_time,progress) ~ 1, data = surv_cancer)
+
+# When displaying the table, we can optionally include rows for censored patients
+summary(km_table_cancer, censored = TRUE) 
+
+```
+
+Once we have a Kaplan-Meier table, we can use `ggsurvfit()` from the `ggsurvfit` library to plot the survival curve. The function works similarly to `ggplot()`, allowing us to easily include additional information on our plot. We can denote the times of censored events with `+ add_censor_mark()`.
+
+```{r}
+#| code-fold: true
+
+surv_plot_1 <- km_table_cancer %>% 
+  ggsurvfit() + add_censor_mark()
+
+surv_plot_1
+
+```
+
+Suppose we now want to compare time to progression between males and females. We can do so by changing the right-hand side of our survival formula to `~ gender`
+
+```{r}
+#| code-fold: true
+
+# Add labels if desired
+surv_cancer$gender <- factor(surv_cancer$gender, labels = c("Male","Female"))
+
+km_table_cancer_2 <- survfit2(Surv(prog_time,progress) ~ gender, data = surv_cancer)
+
+# When displaying the table, we can optionally include rows for censored patients
+summary(km_table_cancer_2, censored = TRUE) 
+
+```
+
+```{r}
+#| code-fold: true
+
+surv_plot_2 <- km_table_cancer_2 %>% 
+  ggsurvfit() + add_censor_mark() + add_legend_title()
+
+surv_plot_2
+
+```
+
+#### LRT
+
+Now that we have two groups, we may want to compare survival times between them. There is censoring in our example, so we will use the log-rank test. We'll use the `survdiff()` function from the `survival` library, which accepts the familiar arguments of a formula and the data.
+
+```{r}
+#| code-fold: true
+
+lrt_cancer_1 <- survdiff(Surv(prog_time,progress) ~ gender, data = surv_cancer)
+
+lrt_cancer_1
+
+```
+
+The output above rounds a bit much, so we can pull out the test-statistic and p-values and display them with some more digits:
+
+```{r}
+#| code-fold: true
+
+df1 <- data.frame(Test = "LRT",
+                  Chi_sq = round(lrt_cancer_1$chisq,4),
+                  DF = 1,
+                  P_val = round(lrt_cancer_1$pvalue,4))
+
+knitr::kable(df1, format = 'pipe')
+
+```
+
+In our test, we're considering the hypotheses that the survival curves are equivalent for males and females ($\text{H}_0: S_m(t) = S_f(t)$) vs. the curves differ ($\text{H}_A: S_m(t) \neq S_f(t)$). The test results indicate there is not significant evidence the curves differ from one another (at level of significance $\alpha = 0.05$), since our p-value is 0.3036.
+
+#### Cox PH
+
+If we want to get a hazard ratio estimate in addition to a LRT p-value, we can create a Cox proportional hazards model with the `coxph()` function in the `survival` library. Again, we'll use the same formula as the main argument in the function.
+
+```{r}
+#| code-fold: true
+
+coxph_cancer_1 <- coxph(Surv(prog_time,progress) ~ gender, data = surv_cancer)
+coxph_cancer_1
+
+```
+
+The relevant piece of the above output is in the 'exp(coef)' column. From that, we learn that the risk of progression in females is 1.77 times higher than for males.
+
+If we'd like to also control for age in the model, we can add a variable to the right-hand side of our formula and fit a second model.
+
+```{r}
+#| code-fold: true
+
+coxph_cancer_2 <- coxph(Surv(prog_time,progress) ~ gender + age, data = surv_cancer)
+coxph_cancer_2
+
+```
+
+The given HR estimate of 0.9987 is for a 1-unit increase in the predictor variable, in this case a 1 year increase in age. If we want to estimate the hazard ratio for a 10-year increase in age, we can pull out the coefficient estimate (*not* the exp(coef) value), multiply it by our desired change, then exponentiate it.
+
+```{r}
+#| code-fold: true
+
+# get second row from the coef column
+age_coef <- coxph_cancer_2$coefficients[2]
+
+age_coef_10 <- exp(age_coef*10)
+age_coef_10
+
+```
+
+## Power & Sample Size
+
+-   $Pr(\text{reject } H_0|H_0 \text{ is true}) = \alpha$
+-   $Pr(\text{do not reject } H_0|H_A \text{ is true}) = \beta$
+-   $Pr(\text{reject } H_0|H_A \text{ is true}) = 1 – \beta = \text{Power}$
+
+Ways to increase power:
+
+-   Increase $\alpha$ (typically do not want to do this)
+-   Increase sample size
+-   Increase the detectable difference
+-   Decrease $\sigma$ (for continuous outcomes)
+
+Ways to decrease sample size:
+
+-   Increase $\alpha$ (typically do not want to do this)
+-   Decrease power
+-   Increase the detectable difference
+-   Decrease $\sigma$ (for continuous outcomes)
+
+### Examples
+
+We'll follow along with the examples from the Power and Sample Size lecture. You can refer to the slides for additional details!
+
+We will use of both the `pwrss` and `pwr` libraries to solve the examples. Both libraries offer a similar set of functions with some differences in the way the work:
+
+- `pwrss` functions will take means/proportions and standard deviations as arguments, while `pwr` functions might need an effect size instead.
+- The `pwrss` library has functions for z-tests, while `pwr` only has the t-test equivalents
+
+#### Sample size
+
+Design a study to assess whether hypertensive men have a different mean cholesterol level than healthy men
+
+-   From literature, healthy men have $\mu = 211$ mg/dL, $\sigma = 46$ mg/dL
+-   You want to be 90% sure that you are able to detect a difference when hypertensive men have mean 220 mg/dL, for a two-sided 0.05 level test
+
+Q: How large should n be?
+
+If we assume we'll be able to perform a z test, we can calculate our necessary sample size with the `pwrss.z.mean()` from the `pwrss` library.  
+
+```{r}
+#| code-fold: true
+
+library(pwrss)
+
+pwrss.z.mean(
+  mu = 220,     # Mean value we want to see as significantly different
+  sd = 46,      # Assumed standard deviation
+  mu0 = 211,    # Assumed mean
+  alpha = 0.05, # Level of significance
+  power = 0.9,  # Desired power
+  alternative = c("not equal") # Test type (two-sided in this case)
+)
+
+```
+
+If we were planning to use a t test instead, we could use `pwrss.t.mean()`:
+
+```{r}
+#| code-fold: true
+
+pwrss.t.mean(
+  mu = 220,     # Mean value we want to see as significantly different
+  sd = 46,      # Assumed standard deviation
+  mu0 = 211,    # Assumed mean
+  alpha = 0.05, # Level of significance
+  power = 0.9,  # Desired power
+  alternative = c("not equal") # Test type (two-sided in this case)
+)
+
+```
+
+
+#### Power
+
+Consider a study assessing whether the mean IQ in children following cardiac surgery is different than population norms.
+
+-   Literature search finds that population norm is mean = 100, SD = 15
+-   Investigator has funding to test 100 cardiac subjects
+-   Use a two-sided 0.05 level test as don't know direction
+
+Q: What is the power to detect a 5 point difference in IQ?
+
+We will use the `pwrss.z.mean()` function again, but swap out the `power = ` argument for the `n = ` argument.
+
+```{r}
+#| code-fold: true
+
+pwrss.z.mean(
+  mu = 105,
+  sd = 15,
+  mu0 = 100,
+  alpha = 0.05,
+  n = 100,
+  alternative = c("not equal")
+)
+
+```
+
+
+#### Paired t Test
+
+Acupuncture treatment are used to reduce pain in patients with chronic migraine headaches
+
+- Pain recorded on a scale of 1-100 (higher = more pain)
+- Pain recorded before any treatment is administered (pre) and after acupuncture (post)
+- The difference in pain will be computed for each patient
+- Assume that the standard deviation in the difference scores is approximately 20 units
+- A two-sided test of hypothesis will be conducted, at $\alpha =0.05$, to assess whether there is a statistically significant difference in pain scores before and after treatment
+
+Q: How many patients should be involved in the study for 80% power to detect a difference of 10 units on the pain scale?
+
+The `pwrss.t.2means()` function will help us solve this:
+
+```{r}
+#| code-fold: true
+
+pwrss.t.2means(
+  mu1 = 55,       # specify any mean 10 units higher than mu2
+  sd1 = 20,       # Only one sd needed if we're assuming equal variances
+  mu2 = 45,
+  alpha = 0.05,
+  power = 0.8,
+  paired = TRUE,  # important to set if data is paired -- default is FALSE
+  alternative = c("not equal")
+)
+
+```
+
+
+
+#### Two-Sample t Test -- Equal Variances
+
+Clinical trial to evaluate the efficacy of a new drug designed to reduce systolic blood pressure
+
+- Patients randomized to new drug or a placebo
+- Systolic blood pressures will be measured in each patient after 12 weeks on the assigned treatment
+- A 5 unit reduction in mean systolic blood pressure on new drug compared to placebo is a clinically meaningful reduction
+- Assume a common standard deviation of 19 mm Hg
+- A two-sided test will be used with a 5% level of significance
+
+Q: How many patients should be enrolled in the trial to ensure that the power of the test is 80% to detect this difference?
+
+We'll use the same function as above, but remove the `paired = TRUE` argument (default value is false).
+
+```{r}
+#| code-fold: true
+
+pwrss.t.2means(
+  mu1 = 55,
+  sd1 = 19,
+  mu2 = 50,
+  alpha = 0.05,
+  power = 0.8,
+  alternative = c("not equal")
+)
+
+```
+
+Suppose now the investigator wants to randomize 200 patients to placebo and 400 patients to the new drug. What power is there to detect a 5 unit reduction in systolic blood pressure under the same assumptions in the previous example?
+
+The `pwrss` functions don't handle inputting 2 sample sizes, so we'll use the `pwr.t2n.test()` from the `pwr` library instead.
+
+We'll need to compute an effect size to pass into the function.
+
+```{r}
+#| code-fold: true
+
+effect_size <- 5 / 19     # desired detectable difference divided by standard deviation
+
+pwr.t2n.test(
+  n1 = 200,
+  n2 = 400,
+  d = effect_size,
+  sig.level = 0.05,
+  alternative = "two.sided"
+)
+
+
+```
+
+#### Two-Sample t Test – Unequal Variances
+
+Suppose the investigator is not willing to assume a common standard deviation for each group, but rather
+- placebo group has SD 19 mm Hg
+- new drug has larger SD of 30 mm Hg
+
+A two-sided test will be used with a 5% level of significance and a equal number of patients will be enrolled in each arm.
+
+Q: How many patients should be enrolled in the trial to ensure that the power of the test is 80% to detect a difference of 5 units?
+
+We'll return to using the `pwrss.t.2means()` function, adding an arument for our second standard deviation.
+
+
+```{r}
+#| code-fold: true
+
+pwrss.t.2means(
+  mu1 = 55,
+  sd1 = 19,
+  mu2 = 50,
+  sd2 = 30,
+  alpha = 0.05,
+  power = 0.8,
+  alternative = c("not equal")
+)
+
+```
+
+
+#### One-Sample Proportion
+
+Recent report indicates that 26% of people without cardiovascular disease had elevated LDL cholesterol levels.
+
+- An investigator hypothesizes that a higher proportion (than 26%) of patients with a history of cardiovascular disease will have elevated LDL cholesterol.
+- A two sided test will be used with a 5% level of significance.
+
+Q: How many patients should be studied to ensure 90% power to detect a 5% difference in the proportion with elevated LDL cholesterol?
+
+We'll use can use `pwr.p.test()` to solve this. The function expects us to input an effect size `h` based on our proprtions. Luckily, there is another function in `pwr` that will do this for us: `ES.h()`.
+
+```{r}
+#| code-fold: true
+
+effect_size <- ES.h(0.26, 0.31)
+
+pwr.p.test(
+  h = effect_size,
+  sig.level = 0.05,
+  power = 0.90,
+  alternative = "two.sided"
+)
+
+```
+
+Suppose instead you have 500 patients available and you want to know what power you have to detect a 5% difference?
+
+```{r}
+#| code-fold: true
+
+pwr.p.test(
+  h = effect_size,
+  sig.level = 0.05,
+  n = 500,
+  alternative = "two.sided"
+)
+
+```
+
+#### Two-sample Proportion
+
+Hypothesis: there is a higher incidence of flu among students who use their athletic facility regularly than their counterparts who do not. Compare the proportion of flu in students who used the athletic facility regularly versus those who do not.
+
+- During a typical year, approximately 35% of the students experience flu
+- The investigators feel that an increase in flu to 45% among those who used the athletic facility regularly would be clinically meaningful
+- A two-sided test will be used with a 5% level of significance
+
+Q: How many students should be enrolled in the study to ensure that the power of the test is 80% to detect this difference in the proportions?
+
+
+```{r}
+#| code-fold: true
+
+effect_size <- ES.h(0.35, 0.45)
+
+
+pwr.2p.test(
+  h = effect_size,
+  sig.level = 0.05,
+  power = 0.80,
+  alternative = "two.sided"
+)
+
+```
+
+## Review
+
+**One sample:**
+
+```{r}
+#| code-fold: true
+
+includeHTML("one_sample_table.html")
+
+```
+
+**Two sample:**
+
+```{r}
+#| code-fold: true
+
+includeHTML("two_sample_table.html")
+
+```
+
+**More than two samples (independent):**
+
+```{r}
+#| code-fold: true
+
+includeHTML("gt_two_sample_table.html")
+
+```
+
+\*Nonparametric tests have normal approximations and exact versions.
+
+**General R x C Tables:**
+
+-   $\chi^2$ test
+-   Fisher's exact test
+-   $\text{H}_0:$ Independence of rows and columns
+
+**Two continuous variables:**
+
+-   Pearson correlation coefficient ($r$); test $\text{H}_0: \rho=0$
+-   Spearman correlation coefficient ($r_s$); test $\text{H}_0: \rho=0$
+-   Simple linear regression; test $\text{H}_0: \beta = 0$
+
+**Regression models:**
+
+Use when you want to account for other variables. Can test $\text{H}_0: \beta_j = 0$ to evaluate the association between a predictor and outcome.
+
+-   Linear regression (continuous outcome)
+-   Logistic regression (binary outcome)
+-   Cox proportional hazards model (survival outcome)
+
+### Review questions
+
+#### Review Question 1
+
+1.  One hundred undergraduate students answer a survey which asks them whether they "feel socially accepted" at the university. The answer to the question is a simple `yes' or`no'. You also know which students went to public vs. private secondary schools. You want to know if their feelings are related to the type of secondary school they attended. What test is appropriate?
+    a)  One-sample proportion test
+    b)  McNemar's test
+    c)  Chi-square test
+    d)  Two-sample t test
+    e)  Trend test
+
+**ANSWER:**
+
+```{r}
+#| code-fold: true
+
+# c) Chi-square test
+#
+# Used for testing independence between two categorical variables in a contingency table.
+# In this case, you would construct a 2x2 table (public/private school vs. yes/no for social acceptance)
+```
+
+#### Review Question 2
+
+2.  You have measurements on the strength of the right hand and left hand (continuous measure determined by squeezing a spring balance) for 10 people. You want to demonstrate that on average, people's right hands are stronger than their left hands. What is the best test?
+    a)  Two-sample t test
+    b)  McNemar's test
+    c)  ANOVA
+    d)  Wilcoxon rank-sum test
+    e)  Wilcoxon signed-rank test
+    
+**ANSWER:**
+
+```{r}
+#| code-fold: true
+
+# e) Wilcoxon signed-rank test
+#
+# Used because we have paired, continuous measurements
+```
+
+#### Review Question 3
+
+3.  An investigator takes a random sample of 200 infants born in 2019 in North Carolina. You would like to know if sex is associated with birth weight for infants in NC. What is the best approach?
+    a)  Two-sample t test
+    b)  Pearson correlation coefficient
+    c)  Paired t test
+    d)  Chi-square test
+    e)  Sign test
+        
+**ANSWER:**
+
+```{r}
+#| code-fold: true
+
+# a) Two-sample t test
+#
+# Used for comparing the means of a continuous variable between two independent groups 
+# (e.g., male vs. female infants).
+```
+
+#### Review Question 4
+
+4.  A hospital administrator took a sample of 50 staff members. Of the 50 staff members, 39 had received a flu shot. The hospital wants to have a 90% vaccination rate (for staff) for the flu. You want to know if there is evidence that the hospital has a different vaccination percent than the target. What test could you use?
+    a)  Fisher's exact test
+    b)  One-sample proportion test
+    c)  One-sample t test
+    d)  Two-sample t test
+    e)  Chi-square test
+        
+**ANSWER:**
+
+```{r}
+#| code-fold: true
+
+# b) One-sample proportion test
+#
+# Used because we want to compare an observed proportion to a hypothesized proportion (e.g., 0.9)
+#
+# NOTE: We could also use a chi-square goodness-of-fit test, but a one-sample prop test is more direct
+```
+
+#### Review Question 5
+
+5.  You want to know if there is an association between length of stay in the hospital and age of the patient. When investigating this association, you also want to take into account the patient's sex and number of previous admissions. What is the best approach?
+    a)  Linear regression
+    b)  Logistic regression
+    c)  Pearson correlation coefficient
+    d)  Log-rank test
+    e)  Two-sample t test
+        
+**ANSWER:**
+
+```{r}
+#| code-fold: true
+
+# a) Linear regression
+#
+# Used because we can model the relationship between a continuous outcome variable
+# (length of stay) and one or more predictor variables.
+```
+
+
+### Extra practice
+
+#### Practice 1
+
+An investigator is planning a study to assess the association between alcohol consumption and grade point average among college seniors. The plan is to categorize students as heavy drinkers or not using 5 or more drinks on a typical drinking day as the criterion for heavy drinking. Mean grade point averages will be compared between students classified as heavy drinkers versus not. The standard deviation in grade point averages is assumed to be 0.42 and a meaningful difference in grade point averages is 0.25 units. If 100 college seniors are enrolled in the study (50 heavy drinkers and 50 non-heavy drinkers), what is the power of the test to detect a 0.25-unit difference in mean grade point averages? Use a two-sided test with a 5% level of significance.
+    A)  We want to compare a continuous outcome (GPA) between 2 independent groups (heavy drinkers and non-heavy drinkers), so we want to use a two-sample t test. We are only given one standard deviation, so we assume equal variances.
+
+```{r}
+#| code-fold: true
+
+#| code-fold: true
+
+pwrss.t.2means(
+  mu1 = 3.5,
+  sd1 = .42,
+  mu2 = 3.25,
+  alpha = 0.05,
+  n2 = 50,     # This function assumes equal samples, so we specify that the second sample has 50 students
+  alternative = c("not equal")
+)
+
+
+```
+
+#### Practice 2
+
+A medical device manufacturer produces implantable stents. During the manufacturing process, approximately 10% of the stents are deemed to be defective. The manufacturer wants to test whether the proportion of defective stents is more than 10%. If the process produces more than 15% defective stents, then corrective action must be taken. Therefore, the manufacturer wants the test to have 90% power to detect a difference in proportions of this magnitude. How many stents must be evaluated? Use a two-sided test with a 5% level of significance.
+    A)  We have one sample and we want to compare the proportion of defective stents to the typical value of 10%, so we want a one-sample proportion test.
+
+```{r}
+#| code-fold: true
+
+pwr.p.test(
+  h = ES.h(0.10, 0.15),
+  power = 0.9,
+  alternative = "two.sided"
+)
+
+```
+
+#### Practice 3
+
+Suppose we are interested in the outcome of 5-minute Apgar score treated as a binary variable (from the "lowbwt" data). Abnormal scores are less than 7 and normal scores are greater than or equal to 7. Add a new variable for this to the `lowbwt` data frame. Is gestational age associated with having an abnormal Agar score after controlling for sex? Perform an appropriate hypothesis test making sure to interpret the estimated OR as part of your conclusion.
+    A)  We'll use logistic regression to solve this question.
+
+```{r}
+#| code-fold: true
+
+
+# Create ab_apgar variable
+lowbwt <- lowbwt %>%
+  mutate(ab_apgar = ifelse(apgar5 < 7, 1, 0))
+
+# Fit logistic model
+log_model_ab_apgar <- glm(ab_apgar ~ gestage + sex, data = lowbwt, family = "binomial")
+
+# Display summary of the model
+summary(log_model_ab_apgar)
+
+```
+
+1.	$H_0: \beta_{gestage} = 0$, $H_A: \beta_{gestage} \neq 0$
+2.	$\alpha = 0.05$
+3.	$z = -2.25$
+4.	$p = 0.024$
+5.	$p < 0.05$ so reject $H_0$
+6.	There is evidence to conclude that there is a significant association between having an abnormal Apgar score and gestational age after controlling for sex. Specifically, a 1 week increase in gestational age is associated with a reduction in the odds of having an abnormal Apgar score by a factor of $e^{-0.196} = 0.822$ after controlling for sex.
+
+
+#### Practice 4
+
+Suppose we are interested in overall survival (time to death) in the 18 cancer patients. Is there evidence of a difference in overall survival between males and females? Use a hypothesis test to support your answer.
+    A)  We can use a LRT or Cox PH model to perform the test. Our output in the survival analysis contains the test-statistic and p-value info we need.
+
+```{r}
+#| code-fold: true
+
+lrt_cancer_1 <- survdiff(Surv(prog_time,progress) ~ gender, data = surv_cancer)
+
+lrt_cancer_1$chisq
+lrt_cancer_1$pvalue
+
+```
+
+1.	$\text{H}_0: S_{male}(t) = S_{female}(t)$ vs. $\text{H}_A: S_{male}(t) \neq S_{female}(t)$ or $\text{H}_0: HR = 1$ vs. $\text{H}_A: HR \neq 1$
+2.	$\alpha = 0.05$
+3.	$\chi^2 = 1.06$
+4.	$p = 0.304$
+5.	$p > 0.05$ so fail to reject $H_0$
+6.	There is no evidence of a difference in overall survival between males and females. 
+
+
+```{r}
+#| code-fold: true
+
+coxph_cancer_1 <- coxph(Surv(prog_time,progress) ~ gender, data = surv_cancer)
+coxph_cancer_1
+
+```
+
+
+1.	$H_0: \beta = 0$, $H_A:\beta \neq 0$
+2.	$\alpha = 0.05$
+3.	$z = 1.016$ (i.e. $\chi^2 = 1.03$)
+4.	$p = 0.31$
+5.	$p > 0.05$ so fail to reject $H_0$
+6.	There is no evidence of a difference in overall survival between males and females. 
+
